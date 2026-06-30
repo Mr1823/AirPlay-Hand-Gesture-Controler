@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+drawing_*.png
+web_drawing_*.png
+.DS_Store
