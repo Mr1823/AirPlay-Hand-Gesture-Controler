@@ -348,7 +348,7 @@ class UIRenderer:
 
     def draw_puzzle(self, frame: np.ndarray, pieces: list,
                     grabbed_idx: Optional[int], cursor_pos: Optional[Tuple[int, int]],
-                    solved: bool = False):
+                    solved: bool = False, hover_progress: float = 0.0):
         """
         Draw the 3x3 puzzle board centered on frame.
         pieces: list of dicts {"orig_idx": int, "current_idx": int, "img": np.ndarray}
@@ -410,6 +410,41 @@ class UIRenderer:
                 frame[gy1:gy2, gx1:gx2] = slice_img
                 # Highlight border for floating grabbed piece
                 cv2.rectangle(frame, (gx1, gy1), (gx2, gy2), (0, 255, 200), 2)
+
+        # ── Draw Control Panel on the Left Sidebar ──
+        btn_x1, btn_y1, btn_x2, btn_y2 = 40, 330, 278, 390
+        
+        # Panel header text
+        cv2.putText(frame, "PUZZLE CONTROLS", (40, 310), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (100, 100, 110), 1, cv2.LINE_AA)
+        
+        # Semi-transparent button background (glass effect)
+        sub = frame[btn_y1:btn_y2, btn_x1:btn_x2]
+        rect_overlay = np.zeros_like(sub)
+        rect_overlay[:] = (25, 25, 30)  # dark charcoal background
+        cv2.addWeighted(rect_overlay, 0.7, sub, 0.3, 0, sub)
+        
+        # Hover progress bar at the bottom of the button
+        if hover_progress > 0.0:
+            bar_h = 4
+            prog_w = int((btn_x2 - btn_x1) * hover_progress)
+            cv2.rectangle(frame, (btn_x1, btn_y2 - bar_h), (btn_x1 + prog_w, btn_y2), (0, 255, 200), -1)
+            # Glowing border
+            cv2.rectangle(frame, (btn_x1, btn_y1), (btn_x2, btn_y2), (0, 255, 200), 2)
+        else:
+            # Default border
+            cv2.rectangle(frame, (btn_x1, btn_y1), (btn_x2, btn_y2), (70, 70, 80), 2)
+            
+        # Draw "RETAKE & SHUFFLE" text centered in the button
+        btn_text = "RETAKE & SHUFFLE"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.45
+        thickness = 1
+        text_size = cv2.getTextSize(btn_text, font, font_scale, thickness)[0]
+        text_x = btn_x1 + (btn_x2 - btn_x1 - text_size[0]) // 2
+        text_y = btn_y1 + (btn_y2 - btn_y1 + text_size[1]) // 2
+        
+        text_color = (0, 255, 200) if hover_progress > 0.0 else (200, 200, 210)
+        cv2.putText(frame, btn_text, (text_x, text_y), font, font_scale, text_color, thickness, cv2.LINE_AA)
 
         if solved:
             h, w = frame.shape[:2]

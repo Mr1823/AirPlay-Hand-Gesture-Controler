@@ -91,6 +91,9 @@ class DrawingApp:
         # ── Button debounce ──
         self._btn_pressed = False
 
+        # ── Puzzle retake hover frames ──
+        self._retake_hover_frames = 0
+
     # ── Lifecycle ──────────────────────────────────────
 
     def _check_camera(self):
@@ -265,10 +268,34 @@ class DrawingApp:
         self.confetti_particles = []
         self.grabbed_piece_idx = None
 
+    def trigger_retake_and_shuffle(self):
+        """Trigger the countdown to capture and start the puzzle again."""
+        import time
+        self.countdown_active = True
+        self.countdown_start_time = time.time()
+        self._trigger_puzzle_capture = False
+        self.puzzle_active = False
+        self.puzzle_pieces = []
+        self.grabbed_piece_idx = None
+        self.ui.feedback.show("Retaking Puzzle...")
+
     def _handle_puzzle(self, lm: np.ndarray):
         """Pinch to grab a piece → drag to grid slot → release with hysteresis to swap (with edge-snapping)."""
         ix, iy = int(lm[8][0]), int(lm[8][1])
         self._cursor = (ix, iy)
+
+        # Check hover for Retake & Shuffle button:
+        # Left sidebar button bounds: x in [40, 278], y in [330, 390]
+        if not self.puzzle_solved and self.grabbed_piece_idx is None:
+            if 40 <= ix <= 278 and 330 <= iy <= 390:
+                self._retake_hover_frames += 1
+                if self._retake_hover_frames >= 30:
+                    self.trigger_retake_and_shuffle()
+                    self._retake_hover_frames = 0
+            else:
+                self._retake_hover_frames = max(0, self._retake_hover_frames - 1)
+        else:
+            self._retake_hover_frames = 0
 
         BOARD_X = 317
         BOARD_Y = 65
@@ -473,6 +500,7 @@ class DrawingApp:
                 self._was_pinching = False
                 self.grabbed_piece_idx = None
                 self._pinch_release_counter = 0
+                self._retake_hover_frames = 0
 
             # ── Merge layers + composite ──
             if self.countdown_active:
@@ -488,7 +516,14 @@ class DrawingApp:
             if self.puzzle_active:
                 display = (display * 0.25).astype(np.uint8)
                 cursor = self._cursor if lm is not None else None
-                self.ui.draw_puzzle(display, self.puzzle_pieces, self.grabbed_piece_idx, cursor, solved=self.puzzle_solved)
+                self.ui.draw_puzzle(
+                    display,
+                    self.puzzle_pieces,
+                    self.grabbed_piece_idx,
+                    cursor,
+                    solved=self.puzzle_solved,
+                    hover_progress=self._retake_hover_frames / 30.0,
+                )
                 if self.puzzle_solved:
                     self._update_confetti(display)
             elif not self.countdown_active:
@@ -497,10 +532,17 @@ class DrawingApp:
 
                 if self._trigger_puzzle_capture:
                     self._trigger_puzzle_capture = False
-                    self._start_puzzle(display)
+                    self._start_puzzle(frame)
                     display = (display * 0.25).astype(np.uint8)
                     cursor = self._cursor if lm is not None else None
-                    self.ui.draw_puzzle(display, self.puzzle_pieces, self.grabbed_piece_idx, cursor, solved=self.puzzle_solved)
+                    self.ui.draw_puzzle(
+                        display,
+                        self.puzzle_pieces,
+                        self.grabbed_piece_idx,
+                        cursor,
+                        solved=self.puzzle_solved,
+                        hover_progress=self._retake_hover_frames / 30.0,
+                    )
 
             # ── Draw UI ──
             cursor = self._cursor if lm is not None else None
@@ -534,6 +576,8 @@ class DrawingApp:
             elif key == ord("-"):
                 self.cfg.brush_size = max(self.cfg.min_brush_size,
                                           self.cfg.brush_size - 2)
+            elif (key == ord("r") or key == ord("R")) and self.puzzle_active:
+                self.trigger_retake_and_shuffle()
 
         self._cleanup()
 
