@@ -188,3 +188,74 @@ def draw_shape_preview(display: np.ndarray, tool: str,
     
     # 4. Dimensions HUD
     draw_measurements_hud(display, tool, p1, snapped_p2)
+
+
+def get_object_contours(frame: np.ndarray,
+                        hand_lm: np.ndarray | None = None) -> list:
+    """
+    Detect object outlines in *frame* using Canny edge detection.
+
+    Algorithm:
+      1. Greyscale + Gaussian blur to reduce noise
+      2. Otsu's method to compute a dynamic high threshold
+      3. Canny edge detection (low = 0.5 × high, per Canny's recommendation)
+      4. Morphological dilation to close small edge gaps
+      5. findContours — external only, simple chain approximation
+      6. Filter: area between 800 px² and 80% of frame area
+      7. Exclude contours that overlap hand landmark positions (within 15 px)
+
+    Args:
+        frame:    BGR webcam frame.
+        hand_lm:  Optional (21, 2) int pixel landmark array from HandTracker.
+
+    Returns:
+        List of contours suitable for cv2.drawContours / cv2.polylines.
+    """
+    h, w = frame.shape[:2]
+    min_area = 800
+    max_area = h * w * 0.80
+
+    # ── Step 1: greyscale + blur ──
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # ── Step 2: Otsu's dynamic threshold ──
+    high_thresh, _ = cv2.threshold(blurred, 0, 255,
+                                   cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    low_thresh = high_thresh * 0.5
+
+    # ── Step 3: Canny ──
+    edges = cv2.Canny(blurred, low_thresh, high_thresh)
+
+    # ── Step 4: dilate to close gaps ──
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    dilated = cv2.dilate(edges, kernel, iterations=1)
+
+    # ── Step 5: find contours ──
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+
+    # ── Step 6 & 7: filter ──
+    # Build list of hand pixel points for proximity check
+    hand_pts: list = []
+    if hand_lm is not None:
+        for pt in hand_lm:
+            hand_pts.append((float(pt[0]), float(pt[1])))
+
+    valid = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if not (min_area < area < max_area):
+            continue
+
+        # Skip contours that contain / touch hand landmark positions
+        near_hand = False
+        for pt in hand_pts:
+            dist = cv2.pointPolygonTest(cnt, pt, True)   # True = measure distance
+            if dist >= -15:   # inside or within 15 px of edge
+                near_hand = True
+                break
+        if not near_hand:
+            valid.append(cnt)
+
+    return valid

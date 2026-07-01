@@ -61,4 +61,4 @@ PALETTE = [
 ]
 
 # ── Tool list (order matches toolbar layout) ──
-TOOLS = ["brush", "eraser", "line", "rect", "circle", "star", "arrow", "puzzle"]
+TOOLS = ["brush", "eraser", "line", "rect", "circle", "star", "arrow", "scan", "puzzle"]

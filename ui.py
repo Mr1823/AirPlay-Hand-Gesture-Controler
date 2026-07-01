@@ -5,6 +5,7 @@
 import cv2
 import numpy as np
 import time
+import math
 from typing import Tuple, Dict, Optional
 from config import PALETTE, TOOLS
 
@@ -68,7 +69,6 @@ def _draw_circle_icon(img, cx, cy, color):
 
 
 def _draw_star_icon(img, cx, cy, color):
-    import math
     pts = []
     for i in range(10):
         angle = (i * 36 - 90) * math.pi / 180
@@ -98,6 +98,25 @@ def _draw_puzzle_icon(img, cx, cy, color):
     cv2.line(img, (x1, cy - half + 2 * third), (x2, cy - half + 2 * third), color, 1)
 
 
+def _draw_scan_icon(img, cx, cy, color):
+    """Viewfinder / target icon representing the scan tool."""
+    # Outer circle
+    cv2.circle(img, (cx, cy), 9, color, 1, cv2.LINE_AA)
+    # Inner dot
+    cv2.circle(img, (cx, cy), 2, color, -1, cv2.LINE_AA)
+    # Corner bracket ticks (top-left, top-right, bottom-left, bottom-right)
+    r = 9
+    t = 4  # tick length
+    cv2.line(img, (cx - r, cy - r + t), (cx - r, cy - r), color, 1)
+    cv2.line(img, (cx - r, cy - r), (cx - r + t, cy - r), color, 1)
+    cv2.line(img, (cx + r - t, cy - r), (cx + r, cy - r), color, 1)
+    cv2.line(img, (cx + r, cy - r), (cx + r, cy - r + t), color, 1)
+    cv2.line(img, (cx + r, cy + r - t), (cx + r, cy + r), color, 1)
+    cv2.line(img, (cx + r, cy + r), (cx + r - t, cy + r), color, 1)
+    cv2.line(img, (cx - r + t, cy + r), (cx - r, cy + r), color, 1)
+    cv2.line(img, (cx - r, cy + r), (cx - r, cy + r - t), color, 1)
+
+
 ICON_DRAWERS = {
     "brush": _draw_brush_icon,
     "eraser": _draw_eraser_icon,
@@ -106,6 +125,7 @@ ICON_DRAWERS = {
     "circle": _draw_circle_icon,
     "star": _draw_star_icon,
     "arrow": _draw_arrow_icon,
+    "scan": _draw_scan_icon,
     "puzzle": _draw_puzzle_icon,
 }
 
@@ -340,6 +360,17 @@ class UIRenderer:
             cv2.circle(frame, (x, y), 8, (0, 255, 200), 1, cv2.LINE_AA)
             cv2.circle(frame, (x, y), 2, (255, 255, 255), -1, cv2.LINE_AA)
 
+        elif tool == "scan":
+            # Animated scan-reticle cursor: outer ring + corner ticks + centre dot
+            cv2.circle(frame, (x, y), 18, (0, 255, 200), 1, cv2.LINE_AA)
+            cv2.circle(frame, (x, y), 4, (0, 255, 200), 1, cv2.LINE_AA)
+            cv2.circle(frame, (x, y), 2, (255, 255, 255), -1, cv2.LINE_AA)
+            t = 7
+            cv2.line(frame, (x - 18, y), (x - 18 + t, y), (0, 255, 200), 1)
+            cv2.line(frame, (x + 18 - t, y), (x + 18, y), (0, 255, 200), 1)
+            cv2.line(frame, (x, y - 18), (x, y - 18 + t), (0, 255, 200), 1)
+            cv2.line(frame, (x, y + 18 - t), (x, y + 18), (0, 255, 200), 1)
+
         else:
             # Shape tools — dotted crosshair
             cv2.drawMarker(frame, (x, y), (0, 255, 200),
@@ -458,8 +489,6 @@ class UIRenderer:
             cv2.line(frame, (0, h // 2 - 80), (w, h // 2 - 80), (0, 255, 200), 2)
             cv2.line(frame, (0, h // 2 + 80), (w, h // 2 + 80), (0, 255, 200), 2)
 
-            import time
-            import math
             # Pulsing color/scale
             pulse = math.sin(time.time() * 5)
             color1 = (0, 255, 200)  # glowing teal

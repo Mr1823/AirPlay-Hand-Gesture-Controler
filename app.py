@@ -5,13 +5,14 @@
 import cv2
 import numpy as np
 import time
+import random
 from typing import Optional, Tuple
 
 from config import Config, PALETTE, TOOLS
 from camera import Camera
 from hand_tracking import HandTracker
 from gestures import GestureDetector, is_index_only
-from shapes import draw_shape, draw_shape_preview
+from shapes import draw_shape, draw_shape_preview, get_object_contours
 from ui import UIRenderer, get_all_button_coords, TOOLBAR_H
 
 
@@ -94,6 +95,10 @@ class DrawingApp:
         # ── Puzzle retake hover frames ──
         self._retake_hover_frames = 0
 
+        # ── Scan tool ──
+        self._scan_done = False          # debounce: prevents re-stamp until finger lifts
+        self._scan_contours: list = []   # cached per-frame contour list
+
     # ── Lifecycle ──────────────────────────────────────
 
     def _check_camera(self):
@@ -140,8 +145,8 @@ class DrawingApp:
     # ── Layer merging ──
 
     def _merge_layers(self) -> np.ndarray:
-        merged = self.layers[0].copy()
-        for i in range(1, len(self.layers)):
+        merged = np.zeros_like(self.layers[0])
+        for i in range(len(self.layers)):
             if self.layer_vis[i]:
                 cv2.add(merged, self.layers[i], merged)
         return merged
@@ -152,6 +157,11 @@ class DrawingApp:
         """Accumulate points and draw continuous brush strokes."""
         ix, iy = int(lm[8][0]), int(lm[8][1])
         self._cursor = (ix, iy)
+
+        # Save undo once at the start of each new stroke
+        if len(self._draw_points) == 0:
+            self._save_undo()
+
         self._draw_points.append((ix, iy))
         if len(self._draw_points) > self._max_draw_points:
             self._draw_points.pop(0)
@@ -190,11 +200,6 @@ class DrawingApp:
 
         pinching = self.gestures.is_pinching
 
-        if pinching != self._was_pinching:
-            from gestures import _dist, _palm_size, THUMB_TIP, INDEX_TIP
-            curr_dist = _dist(lm[THUMB_TIP], lm[INDEX_TIP]) / _palm_size(lm)
-            print(f"[Shape Mode] Pinch state: {'Pinch Active' if pinching else 'Released'} | Dist: {curr_dist:.3f} | Thresh: {self.cfg.pinch_threshold}")
-
         if pinching:
             self._pinch_release_counter = 0
             if self._shape_start is None:
@@ -227,11 +232,58 @@ class DrawingApp:
 
         self._was_pinching = pinching
 
+    # ── Object Outline Detector (Scan tool) ──
+
+    def _update_scan_contours(self, lm):
+        """
+        Run contour detection on every frame (background pass).
+        Results are cached in self._scan_contours so:
+          • The preview overlay is always available even before a hand appears.
+          • Stamping only needs to check the cached list — no per-gesture compute.
+        Called unconditionally in the main loop when scan tool is active.
+        """
+        self._scan_contours = get_object_contours(
+            self._last_raw_frame,
+            hand_lm=lm,  # None is fine — skips hand-exclusion step
+        )
+
+    def _handle_scan(self, lm, display: np.ndarray):
+        """
+        Draw the cached contour preview and stamp on index-finger gesture.
+        Contour detection already ran this frame via _update_scan_contours().
+        """
+        # Update cursor if hand is visible
+        if lm is not None:
+            ix, iy = int(lm[8][0]), int(lm[8][1])
+            self._cursor = (ix, iy)
+        else:
+            ix, iy = self._cursor
+
+        contours = self._scan_contours
+
+        # ── Always-on full-screen preview ──
+        if contours:
+            cv2.drawContours(display, contours, -1, (0, 220, 180), 1, cv2.LINE_AA)
+
+        # ── Stamp on index-finger gesture (below toolbar) ──
+        if lm is not None and self.gestures.is_drawing and iy > TOOLBAR_H:
+            if not self._scan_done and contours:
+                self._save_undo()
+                cv2.drawContours(
+                    self.layers[self.cfg.current_layer],
+                    contours, -1,
+                    self.cfg.color,
+                    self.cfg.brush_size,
+                )
+                self._scan_done = True
+                self.ui.feedback.show(f"{len(contours)} outline(s) stamped")
+        else:
+            self._scan_done = False
+
     # ── Puzzle Mode Logic ──
 
     def _start_puzzle(self, composite_img: np.ndarray):
         """Slice the composite screen capture into a 3x3 grid of pieces and shuffle them."""
-        import random
         BOARD_X = 317
         BOARD_Y = 65
         CELL_SZ = 215
@@ -270,7 +322,6 @@ class DrawingApp:
 
     def trigger_retake_and_shuffle(self):
         """Trigger the countdown to capture and start the puzzle again."""
-        import time
         self.countdown_active = True
         self.countdown_start_time = time.time()
         self._trigger_puzzle_capture = False
@@ -352,7 +403,6 @@ class DrawingApp:
 
     def _init_confetti(self):
         """Initialise colorful floating confetti particles."""
-        import random
         self.confetti_particles = []
         h, w = 720, 1280
         for _ in range(120):
@@ -367,7 +417,6 @@ class DrawingApp:
 
     def _update_confetti(self, frame: np.ndarray):
         """Update physics and draw particles falling down the screen."""
-        import random
         h, w = frame.shape[:2]
         for p in self.confetti_particles:
             p["x"] += p["vx"]
@@ -391,7 +440,6 @@ class DrawingApp:
                 if name in TOOLS:
                     self.cfg.tool = name
                     if name == "puzzle":
-                        import time
                         self.countdown_active = True
                         self.countdown_start_time = time.time()
                         self._trigger_puzzle_capture = False
@@ -428,6 +476,7 @@ class DrawingApp:
 
             frame = cv2.flip(frame, 1)
             h, w = frame.shape[:2]
+            self._last_raw_frame = frame   # used by _handle_scan()
 
             if not self._canvas_ready:
                 self._init_canvas(h, w)
@@ -438,6 +487,10 @@ class DrawingApp:
 
             # ── Gesture detection ──
             self.gestures.update(lm, self.tracker.handedness)
+
+            # ── Scan: always-on contour detection (runs every frame) ──
+            if self.cfg.tool == "scan":
+                self._update_scan_contours(lm)
 
             display = frame.copy()
 
@@ -502,9 +555,12 @@ class DrawingApp:
                 self._pinch_release_counter = 0
                 self._retake_hover_frames = 0
 
+            # ── Scan overlay: draw cached contours on top of composite ──
+            if self.cfg.tool == "scan":
+                self._handle_scan(lm, display)
+
             # ── Merge layers + composite ──
             if self.countdown_active:
-                import time
                 elapsed = time.time() - self.countdown_start_time
                 remaining = 3 - int(elapsed)
                 if elapsed >= 3.0:
